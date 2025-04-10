@@ -99,6 +99,17 @@ class HtmlToMarkdown {
     print('Starting enhanced HTML to Markdown conversion for: $url');
     
     final completer = Completer<String>();
+    final startTime = DateTime.now();
+    
+    // Check model availability first for logging
+    final converter = OnDeviceMarkdownConverter();
+    await converter.initialize();
+    final modelAvailable = await converter.isModelAvailable();
+    
+    print('🔍 AI conversion request:');
+    print('🔍 URL: $url');
+    print('🔍 Model available: $modelAvailable');
+    print('🔍 Start time: $startTime');
     
     showModalBottomSheet(
       context: context,
@@ -106,13 +117,34 @@ class HtmlToMarkdown {
       enableDrag: false,
       builder: (context) => HtmlFetcher(
         url: url,
-        onComplete: (content) {
-          print('HTML content length: ${content.length}');
-          // Use the HTML parser with some extra cleanup
-          final markdown = _enhanceMarkdown(HtmlParser.toMarkdown(content));
-          print('Enhanced conversion completed. Markdown length: ${markdown.length}');
-          completer.complete(markdown);
-          Navigator.of(context).pop();
+        onComplete: (content) async {
+          print('🔍 HTML content fetched: ${content.length} characters');
+          try {
+            // First convert HTML to basic markdown
+            final basicMarkdown = HtmlParser.toMarkdown(content);
+            print('🔍 Basic markdown generated: ${basicMarkdown.length} characters');
+            
+            // Then enhance with AI if model is available
+            final aiEnhanced = await converter.enhanceMarkdownWithAI(basicMarkdown);
+            
+            final endTime = DateTime.now();
+            final duration = endTime.difference(startTime);
+            
+            print('🔍 AI conversion completed');
+            print('🔍 Processing time: ${duration.inMilliseconds}ms');
+            print('🔍 Output length: ${aiEnhanced.length} characters');
+            
+            completer.complete(aiEnhanced);
+            Navigator.of(context).pop();
+          } catch (e) {
+            print('🔍 Error during AI enhancement: $e');
+            // Fallback to basic enhancement
+            final markdown = _enhanceMarkdown(HtmlParser.toMarkdown(content));
+            completer.complete(markdown);
+            Navigator.of(context).pop();
+          } finally {
+            converter.close();
+          }
         },
         onError: (error) {
           print('Error during conversion: $error');
