@@ -1,8 +1,50 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'dart:io';
 import 'src/html_fetcher.dart';
 import 'src/html_parser.dart';
 import 'src/on_device_markdown_converter.dart';
+
+/// Initialize the package - should be called in main() before runApp()
+Future<void> initializeHtmlToMarkdown() async {
+  try {
+    // Initialize Hive without path_provider dependency
+    await _initializeHiveWithoutPathProvider();
+    print('Hive initialized successfully');
+    
+    // Open the box
+    if (!Hive.isBoxOpen('model_settings')) {
+      await Hive.openBox('model_settings');
+      print('Hive box opened successfully');
+    }
+    
+    // Pre-initialize the converter
+    final converter = OnDeviceMarkdownConverter();
+    await converter.initialize();
+    
+    // Check model status at startup
+    final isModelAvailable = await converter.isModelAvailable();
+    print('AI Model availability: $isModelAvailable');
+    
+    converter.close();
+    print('HTML to Markdown initialized successfully');
+  } catch (e) {
+    print('Error initializing HTML to Markdown package: $e');
+  }
+}
+
+/// Initialize Hive without using path_provider
+Future<void> _initializeHiveWithoutPathProvider() async {
+  try {
+    // Get a usable temp directory that doesn't require special permissions
+    final tempDir = Directory.systemTemp;
+    Hive.init(tempDir.path);
+  } catch (e) {
+    print('Error initializing Hive: $e');
+    rethrow;
+  }
+}
 
 class HtmlToMarkdown {
   /// Fetches HTML content from the given URL and converts it to Markdown using standard conversion.
@@ -105,8 +147,54 @@ class HtmlToMarkdown {
         .trim();
   }
   
-  /// Always returns false as we're not using ML models
+  /// Check if an on-device AI model is available for enhanced markdown conversion
   static Future<bool> isOnDeviceModelAvailable() async {
-    return false;
+    final converter = OnDeviceMarkdownConverter();
+    await converter.initialize();
+    try {
+      final isAvailable = await converter.isModelAvailable();
+      return isAvailable;
+    } finally {
+      converter.close();
+    }
+  }
+  
+  /// Register model as available 
+  static Future<void> registerModelAsAvailable(bool available) async {
+    final converter = OnDeviceMarkdownConverter();
+    await converter.initialize();
+    try {
+      await converter.setModelAvailability(available);
+    } finally {
+      converter.close();
+    }
+  }
+  
+  /// Download and install an AI model for enhanced markdown conversion
+  static Future<void> downloadModel({
+    required String modelUrl, 
+    Function(double)? onProgress,
+  }) async {
+    final converter = OnDeviceMarkdownConverter();
+    await converter.initialize();
+    
+    try {
+      // First check if the model is already downloaded
+      final isAvailable = await converter.isModelAvailable();
+      if (isAvailable) {
+        return; // Model already downloaded
+      }
+      
+      // Download the model
+      await converter.downloadModelFromNetwork(
+        modelUrl, 
+        onProgress: onProgress,
+      );
+      
+      // After successful download, mark model as available
+      await converter.setModelAvailability(true);
+    } finally {
+      converter.close();
+    }
   }
 }

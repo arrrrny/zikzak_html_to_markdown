@@ -11,7 +11,11 @@ dependencies:
     sdk: flutter
   html: ^0.15.0
   zikzak_inappwebview: ^1.2.6
-
+  # Use Hive for persistent storage
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  path_provider: ^2.1.1
+  
   # Other platform support as needed
   cupertino_icons: ^1.0.5
 
@@ -21,4 +25,4 @@ dev_dependencies:
   flutter_lints: ^2.0.0
 
 flutter:
-  uses-material-design: true`
+  uses-material-design: true
