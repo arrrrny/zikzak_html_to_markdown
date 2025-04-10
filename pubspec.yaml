@@ -1,16 +1,24 @@
 name: zikzak_html_to_markdown
-description: HTML to Markdown converter
-version: 1.0.0
+description: A Flutter package for converting HTML to Markdown with support for on-device ML enhancement.
+version: 1.0.0+1  # App Store compatibility
+
 environment:
-  sdk: ">=3.0.0 <4.0.0"
+  sdk: '>=2.12.0 <4.0.0'  # Updated for null safety
+  flutter: ">=3.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
+  html: ^0.15.0
   zikzak_inappwebview: ^1.2.6
-  html2md: ^1.3.2
+
+  # Other platform support as needed
+  cupertino_icons: ^1.0.5
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true`

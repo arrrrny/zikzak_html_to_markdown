@@ -1,20 +1,24 @@
 name: zikzak_html_to_markdown_example
-description: Example app for HTML to Markdown converter
-publish_to: none
+description: Demonstrates how to use the zikzak_html_to_markdown plugin.
+publish_to: 'none'
+
+version: 1.0.0+1
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
+  sdk: '>=2.12.0 <4.0.0'  # Updated for null safety
 
 dependencies:
   flutter:
     sdk: flutter
   zikzak_html_to_markdown:
     path: ../
+  cupertino_icons: ^1.0.5
+  flutter_markdown: ^0.6.14  # Updated to latest compatible version
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^2.0.0
+  flutter_lints: ^2.0.1
 
 flutter:
   uses-material-design: true

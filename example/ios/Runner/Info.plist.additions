@@ -1,0 +1,16 @@
+<!-- Add these entries to your Info.plist file for flutter_gemma compatibility -->
+
+<!-- Required for file sharing to access model files -->
+<key>UIFileSharingEnabled</key>
+<true/>
+
+<!-- Required minimum iOS version -->
+<key>MinimumOSVersion</key>
+<string>13.0</string>
+
+<!-- App Transport Security settings if you need to download models -->
+<key>NSAppTransportSecurity</key>
+<dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+</dict>

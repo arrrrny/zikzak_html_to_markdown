@@ -1,5 +1,8 @@
 PODS:
   - Flutter (1.0.0)
+  - MediaPipeTasksGenAI (0.10.21):
+    - MediaPipeTasksGenAIC (= 0.10.21)
+  - MediaPipeTasksGenAIC (0.10.21)
   - OrderedSet (5.0.0)
   - zikzak_inappwebview_ios (1.1.0):
     - Flutter
@@ -11,10 +14,14 @@ PODS:
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
+  - MediaPipeTasksGenAI
+  - MediaPipeTasksGenAIC
   - zikzak_inappwebview_ios (from `.symlinks/plugins/zikzak_inappwebview_ios/ios`)
 
 SPEC REPOS:
   trunk:
+    - MediaPipeTasksGenAI
+    - MediaPipeTasksGenAIC
     - OrderedSet
 
 EXTERNAL SOURCES:
@@ -25,9 +32,11 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
+  MediaPipeTasksGenAI: 64f91ec1f2666abeb6dc719a8e8d1e2bf36374c0
+  MediaPipeTasksGenAIC: 1df8d7c6fcbe797d2a04a514edd8b31445291ec8
   OrderedSet: aaeb196f7fef5a9edf55d89760da9176ad40b93c
   zikzak_inappwebview_ios: 2d413abd48bcaf80cfa7af0619f3b1e752a2e1b9
 
-PODFILE CHECKSUM: 4305caec6b40dde0ae97be1573c53de1882a07e5
+PODFILE CHECKSUM: 05787a71d461685bf4c7c98d971f3e56a4fd52cf
 
 COCOAPODS: 1.16.2
