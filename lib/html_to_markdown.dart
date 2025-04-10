@@ -94,7 +94,7 @@ class HtmlToMarkdown {
     BuildContext context, 
     String url, {
     String? ollamaServerUrl, // Ignored parameter, kept for compatibility
-    String? modelName, // Ignored parameter, kept for compatibility
+    String? modelName, // Model ID parameter
   }) async {
     print('Starting enhanced HTML to Markdown conversion for: $url');
     
@@ -104,11 +104,12 @@ class HtmlToMarkdown {
     // Check model availability first for logging
     final converter = OnDeviceMarkdownConverter();
     await converter.initialize();
-    final modelAvailable = await converter.isModelAvailable();
+    final modelAvailable = await converter.isModelAvailable(modelId: modelName);
     
     print('🔍 AI conversion request:');
     print('🔍 URL: $url');
     print('🔍 Model available: $modelAvailable');
+    print('🔍 Model: ${modelName ?? "default"}');
     print('🔍 Start time: $startTime');
     
     showModalBottomSheet(
@@ -125,7 +126,10 @@ class HtmlToMarkdown {
             print('🔍 Basic markdown generated: ${basicMarkdown.length} characters');
             
             // Then enhance with AI if model is available
-            final aiEnhanced = await converter.enhanceMarkdownWithAI(basicMarkdown);
+            final aiEnhanced = await converter.enhanceMarkdownWithAI(
+              basicMarkdown,
+              modelId: modelName,
+            );
             
             final endTime = DateTime.now();
             final duration = endTime.difference(startTime);
@@ -180,11 +184,11 @@ class HtmlToMarkdown {
   }
   
   /// Check if an on-device AI model is available for enhanced markdown conversion
-  static Future<bool> isOnDeviceModelAvailable() async {
+  static Future<bool> isOnDeviceModelAvailable({String? modelId}) async {
     final converter = OnDeviceMarkdownConverter();
     await converter.initialize();
     try {
-      final isAvailable = await converter.isModelAvailable();
+      final isAvailable = await converter.isModelAvailable(modelId: modelId);
       return isAvailable;
     } finally {
       converter.close();
@@ -192,11 +196,11 @@ class HtmlToMarkdown {
   }
   
   /// Register model as available 
-  static Future<void> registerModelAsAvailable(bool available) async {
+  static Future<void> registerModelAsAvailable(bool available, {String? modelId}) async {
     final converter = OnDeviceMarkdownConverter();
     await converter.initialize();
     try {
-      await converter.setModelAvailability(available);
+      await converter.setModelAvailability(available, modelId: modelId);
     } finally {
       converter.close();
     }
@@ -205,6 +209,7 @@ class HtmlToMarkdown {
   /// Download and install an AI model for enhanced markdown conversion
   static Future<void> downloadModel({
     required String modelUrl, 
+    String? modelName,
     Function(double)? onProgress,
   }) async {
     final converter = OnDeviceMarkdownConverter();
@@ -212,7 +217,7 @@ class HtmlToMarkdown {
     
     try {
       // First check if the model is already downloaded
-      final isAvailable = await converter.isModelAvailable();
+      final isAvailable = await converter.isModelAvailable(modelId: modelName);
       if (isAvailable) {
         return; // Model already downloaded
       }
@@ -220,11 +225,12 @@ class HtmlToMarkdown {
       // Download the model
       await converter.downloadModelFromNetwork(
         modelUrl, 
+        modelId: modelName,
         onProgress: onProgress,
       );
       
       // After successful download, mark model as available
-      await converter.setModelAvailability(true);
+      await converter.setModelAvailability(true, modelId: modelName);
     } finally {
       converter.close();
     }

@@ -11,9 +11,11 @@ class OnDeviceMarkdownConverter {
   static const String _boxName = 'model_settings';
   static const String _keyModelAvailable = 'model_available';
   static const String _keyModelPath = 'model_path';
+  static const String _defaultModelId = 'gemma-2b-it';
   
   // In-memory fallback in case Hive fails
   static bool _inMemoryModelAvailable = false;
+  static final Map<String, bool> _inMemoryModelAvailability = {};
   
   /// Initialize the converter
   Future<void> initialize() async {
@@ -31,40 +33,55 @@ class OnDeviceMarkdownConverter {
   }
   
   /// Check if the model is available - uses Hive for persistence
-  Future<bool> isModelAvailable() async {
+  Future<bool> isModelAvailable({String? modelId}) async {
     try {
+      // Important: Use the specific model ID if provided
+      final String actualModelId = modelId ?? _defaultModelId;
+      final String modelKey = '${_keyModelAvailable}_$actualModelId';
+      
       if (await _isBoxAvailable()) {
         final box = Hive.box(_boxName);
-        return box.get(_keyModelAvailable, defaultValue: false);
+        final isAvailable = box.get(modelKey, defaultValue: false);
+        print('Checking availability for model: $actualModelId - Result: $isAvailable');
+        return isAvailable;
       }
+      
       // Fall back to in-memory state if Hive not available
-      return _inMemoryModelAvailable;
+      final inMemoryAvailable = _inMemoryModelAvailability[actualModelId] ?? false;
+      print('Checking in-memory availability for model: $actualModelId - Result: $inMemoryAvailable');
+      return inMemoryAvailable;
     } catch (e) {
       print('Error checking model availability: $e');
-      // Fall back to in-memory state if error occurs
-      return _inMemoryModelAvailable;
+      return false;
     }
   }
   
   /// Set model availability status
-  Future<void> setModelAvailability(bool available) async {
+  Future<void> setModelAvailability(bool available, {String? modelId}) async {
+    final String modelKey = modelId != null ? '${_keyModelAvailable}_$modelId' : _keyModelAvailable;
+    final String pathKey = modelId != null ? '${_keyModelPath}_$modelId' : _keyModelPath;
+    
     try {
       // Update in-memory state (as backup)
-      _inMemoryModelAvailable = available;
+      if (modelId != null) {
+        _inMemoryModelAvailability[modelId] = available;
+      } else {
+        _inMemoryModelAvailable = available;
+      }
       
       if (await _isBoxAvailable()) {
         final box = Hive.box(_boxName);
-        await box.put(_keyModelAvailable, available);
+        await box.put(modelKey, available);
         
         // If model is available, also save the model path
         if (available) {
-          final modelPath = await _getFakeModelPath();
-          await box.put(_keyModelPath, modelPath);
+          final modelPath = await _getFakeModelPath(modelId: modelId);
+          await box.put(pathKey, modelPath);
         }
         
-        print('Model availability set to: $available (Hive storage)');
+        print('Model availability set to: $available (Hive storage) for model: ${modelId ?? _defaultModelId}');
       } else {
-        print('Model availability set to: $available (in-memory only)');
+        print('Model availability set to: $available (in-memory only) for model: ${modelId ?? _defaultModelId}');
       }
     } catch (e) {
       print('Error setting model availability: $e');
@@ -94,31 +111,34 @@ class OnDeviceMarkdownConverter {
   }
 
   /// Get a consistent path for demo purposes
-  Future<String> _getFakeModelPath() async {
+  Future<String> _getFakeModelPath({String? modelId}) async {
+    final String modelDirectory = modelId ?? _defaultModelId;
     // Fixed path that doesn't depend on platform APIs
     if (Platform.isIOS || Platform.isMacOS) {
-      return '/Users/Documents/gemma_model/gemma-2b-it';
+      return '/Users/Documents/${modelDirectory}';
     } else if (Platform.isAndroid) {
-      return '/storage/emulated/0/Android/data/com.example.app/files/gemma_model/gemma-2b-it';
+      return '/storage/emulated/0/Android/data/com.example.app/files/${modelDirectory}';
     } else {
-      return 'gemma_model/gemma-2b-it';
+      return modelDirectory;
     }
   }
 
   /// Get the model path (from storage or fallback)
-  Future<String> _getModelPath() async {
+  Future<String> _getModelPath({String? modelId}) async {
+    final String pathKey = modelId != null ? '${_keyModelPath}_$modelId' : _keyModelPath;
+    
     try {
       if (await _isBoxAvailable()) {
         final box = Hive.box(_boxName);
-        final path = box.get(_keyModelPath);
+        final path = box.get(pathKey);
         if (path != null) return path;
       }
     } catch (e) {
       print('Error getting model path: $e');
     }
-    return await _getFakeModelPath();
+    return await _getFakeModelPath(modelId: modelId);
   }
-
+  
   /// Convert HTML to Markdown using standard processing
   Future<String> convertHtmlToMarkdown(String html) async {
     if (!_initialized) {
@@ -137,6 +157,7 @@ class OnDeviceMarkdownConverter {
   /// Download model from network
   Future<void> downloadModelFromNetwork(
     String url, {
+    String? modelId,
     Function(double)? onProgress,
   }) async {
     // For demonstration purposes, we'll simulate a download
@@ -147,33 +168,36 @@ class OnDeviceMarkdownConverter {
     }
     
     // 1. Get path for model storage (fake)
-    final modelDir = await _getFakeModelPath();
+    final modelDir = await _getFakeModelPath(modelId: modelId);
     
     // 2. Create directory if needed (simulated)
     print('Creating directory: ${modelDir.substring(0, modelDir.lastIndexOf('/'))}');
     
     // 3. Download model (simulated)
-    print('Downloading Gemma 2B-IT model to: $modelDir');
+    print('Downloading ${modelId ?? "AI"} model to: $modelDir');
     for (int i = 0; i <= 100; i += 5) {
       await Future.delayed(const Duration(milliseconds: 100));
       onProgress?.call(i.toDouble());
     }
     
     // 4. Set model available in Hive for persistence
-    await setModelAvailability(true);
+    await setModelAvailability(true, modelId: modelId);
     
     print('Model download completed successfully');
   }
 
   /// Process markdown with AI model enhancement
-  Future<String> enhanceMarkdownWithAI(String markdown) async {
-    final modelAvailable = await isModelAvailable();
-    final modelPath = await _getModelPath();
+  Future<String> enhanceMarkdownWithAI(String markdown, {String? modelId}) async {
+    // Use the specific model ID for checking availability
+    final String actualModelId = modelId ?? _defaultModelId;
+    final modelAvailable = await isModelAvailable(modelId: actualModelId);
+    final modelPath = await _getModelPath(modelId: actualModelId);
     
     // Log the request to the AI model
     print('🤖 AI MODEL REQUEST:');
     print('🤖 Model available: $modelAvailable');
     print('🤖 Model path: $modelPath');
+    print('🤖 Model ID: $actualModelId');
     print('🤖 Input length: ${markdown.length} characters');
     
     if (!modelAvailable) {
@@ -191,7 +215,7 @@ class OnDeviceMarkdownConverter {
       await Future.delayed(Duration(milliseconds: (processingTime * 1000).toInt()));
       
       // Apply enhancements that simulate AI processing
-      final enhanced = _simulateAIEnhancement(markdown);
+      final enhanced = _simulateAIEnhancement(markdown, modelId: actualModelId);
       
       final endTime = DateTime.now();
       final duration = endTime.difference(startTime);
@@ -211,9 +235,9 @@ class OnDeviceMarkdownConverter {
   }
   
   /// Simulate AI enhancements to markdown
-  String _simulateAIEnhancement(String markdown) {
+  String _simulateAIEnhancement(String markdown, {String? modelId}) {
     // This simulates what an AI model might do to improve the markdown
-    return markdown
+    String enhancedMarkdown = markdown
         // Improve heading structure
         .replaceAll(RegExp(r'([^\n])(#{1,6}\s)'), r'$1\n\n$2')
         .replaceAll(RegExp(r'(#{1,6}[^\n]+)([^\n])'), r'$1\n\n$2')
@@ -241,44 +265,31 @@ class OnDeviceMarkdownConverter {
         .replaceAll('&gt;', '>')
         .replaceAll('&amp;', '&')
         .replaceAll('&quot;', '"')
-        .replaceAll("&apos;", "'")
-        
-        // Add an AI signature at the end
-        + '\n\n<!-- Enhanced with Gemma 2B-IT model -->';
+        .replaceAll("&apos;", "'");
+    
+    // Add a signature based on the model used
+    final modelName = modelId == 'phi-3-mini' ? 'Phi-3 Mini' : 'Gemma 2B-IT';
+    enhancedMarkdown += '\n\n<!-- Enhanced with $modelName model -->';
+    
+    return enhancedMarkdown;
   }
   
-  /// Basic enhancement without AI
-  String _fallbackEnhancement(String markdown) {
-    return markdown
-        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-        .replaceAll(RegExp(r'([^\n])(#{1,6}\s)'), r'$1\n\n$2')
-        .replaceAll(RegExp(r'\n\s*[-*]\s'), '\n* ')
-        .replaceAll(RegExp(r'\n\s*(\d+)[.)] '), r'\n$1. ')
-        .replaceAll('&nbsp;', ' ')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&quot;', '"')
-        .replaceAll("&apos;", "'")
-        .trim()
-        + '\n\n<!-- Enhanced with basic formatting (AI model not available) -->';
-  }
-
   /// Process product extraction with AI enhancement
   Future<String> processProductExtraction(
     String markdown, {
     String? extractionPrompt,
+    String? modelId,
   }) async {
-    final modelAvailable = await isModelAvailable();
-    final modelPath = await _getModelPath();
+    final String actualModelId = modelId ?? _defaultModelId;
+    final modelAvailable = await isModelAvailable(modelId: actualModelId);
+    final modelPath = await _getModelPath(modelId: actualModelId);
     
     // Log the request to the AI model
     print('🏪 PRODUCT EXTRACTION REQUEST:');
     print('🏪 Model available: $modelAvailable');
     print('🏪 Model path: $modelPath');
+    print('🏪 Model ID: $actualModelId');
     print('🏪 Input length: ${markdown.length} characters');
-    
-    // For debugging, log the actual markdown content
     print('🏪 Markdown content: $markdown');
     
     if (!modelAvailable) {
@@ -299,8 +310,8 @@ class OnDeviceMarkdownConverter {
       final processingTime = (processedInput.length / 1500).clamp(0.8, 5.0);
       await Future.delayed(Duration(milliseconds: (processingTime * 1000).toInt()));
       
-      // Extract product information
-      final productInfo = _simulateProductExtraction(markdown);
+      // Extract product information - use the appropriate model for extraction
+      final productInfo = _extractProductInfo(markdown, modelId: actualModelId);
       
       final endTime = DateTime.now();
       final duration = endTime.difference(startTime);
@@ -318,8 +329,8 @@ class OnDeviceMarkdownConverter {
     }
   }
   
-  /// Simulate product extraction with AI
-  String _simulateProductExtraction(String markdown) {
+  /// Extract product information with simulated AI
+  String _extractProductInfo(String markdown, {String? modelId}) {
     // Extract product name
     String productName = 'Unknown Product';
     final titleMatch = RegExp(r'# (.+)\n').firstMatch(markdown);
@@ -372,6 +383,9 @@ class OnDeviceMarkdownConverter {
         ? "## Key Features\n\n${features.join('\n')}"
         : "## Key Features\n\nNo specific features found";
     
+    // Different signature based on the model used
+    final modelName = modelId == 'phi-3-mini' ? 'Phi-3 Mini' : 'Gemma 2B-IT';
+    
     // Format the output in a nice markdown structure
     return '''
 # $productName
@@ -388,8 +402,25 @@ $description
 $featuresSection
 
 ---
-*Extracted with Gemma 2B-IT AI model*
+*Extracted with $modelName AI model*
 ''';
+  }
+
+  /// Basic enhancement without AI
+  String _fallbackEnhancement(String markdown) {
+    return markdown
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+        .replaceAll(RegExp(r'([^\n])(#{1,6}\s)'), r'$1\n\n$2')
+        .replaceAll(RegExp(r'\n\s*[-*]\s'), '\n* ')
+        .replaceAll(RegExp(r'\n\s*(\d+)[.)] '), r'\n$1. ')
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll("&apos;", "'")
+        .trim()
+        + '\n\n<!-- Enhanced with basic formatting (AI model not available) -->';
   }
 
   /// Basic product extraction (fallback)

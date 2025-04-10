@@ -51,6 +51,13 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
   bool _downloadingModel = false;
   double _downloadProgress = 0.0;
   String _modelStatus = '';
+  
+  // Add model selection
+  String _selectedModel = 'gemma-2b-it';
+  final List<Map<String, String>> _availableModels = [
+    {'id': 'gemma-2b-it', 'name': 'Gemma 2B-IT', 'huggingface': 'google/gemma-2b-it'},
+    {'id': 'phi-3-mini', 'name': 'Phi-3 Mini', 'huggingface': 'microsoft/phi-3-mini'},
+  ];
 
   @override
   void initState() {
@@ -113,6 +120,96 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
     }
   }
 
+  /// Validate URL format
+  bool _isValidUrl(String url) {
+    try {
+      final uri = Uri.parse(url);
+      return uri.scheme == 'http' || uri.scheme == 'https';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Show error message in snackbar
+  void _showError(String message) {
+    if (!mounted) return;
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+  
+  // Add new method for downloading models with selected model
+  Future<void> _downloadAIModel() async {
+    if (Platform.isIOS || Platform.isAndroid || Platform.isMacOS) {
+      final selectedModelInfo = _availableModels.firstWhere(
+        (model) => model['id'] == _selectedModel,
+        orElse: () => _availableModels.first,
+      );
+      
+      final modelName = selectedModelInfo['name'] ?? 'AI Model';
+      final modelUrl = 'https://huggingface.co/${selectedModelInfo['huggingface']}/resolve/main/tokenizer.json';
+      
+      setState(() {
+        _downloadingModel = true;
+        _downloadProgress = 0;
+        _modelStatus = 'Starting download of $modelName...';
+      });
+      
+      try {
+        // Check if THIS SPECIFIC model is already downloaded (important change!)
+        final isAlreadyAvailable = await HtmlToMarkdown.isOnDeviceModelAvailable(modelId: _selectedModel);
+        if (isAlreadyAvailable) {
+          setState(() {
+            _modelStatus = '$modelName is already installed and ready to use!';
+          });
+          return;
+        }
+        
+        // Access the plugin through our wrapper with the specific model ID
+        await HtmlToMarkdown.downloadModel(
+          modelUrl: modelUrl,
+          modelName: _selectedModel,
+          onProgress: (progress) {
+            setState(() {
+              _downloadProgress = progress;
+              _modelStatus = 'Downloading $modelName: ${progress.toStringAsFixed(1)}%';
+            });
+          },
+        );
+        
+        setState(() {
+          _modelStatus = '$modelName installed successfully!';
+        });
+        
+        // Force model to be registered as available with the specific model ID
+        await HtmlToMarkdown.registerModelAsAvailable(true, modelId: _selectedModel);
+        
+        // Check model availability again - should be true now
+        final available = await HtmlToMarkdown.isOnDeviceModelAvailable(modelId: _selectedModel);
+        setState(() {
+          _modelStatus += '\nModel available: $available';
+        });
+        
+        // Refresh UI to show updated model status
+        setState(() {});
+      } catch (e) {
+        setState(() {
+          _modelStatus = 'Error downloading $modelName: $e';
+        });
+      } finally {
+        setState(() {
+          _downloadingModel = false;
+        });
+      }
+    } else {
+      _showError('Model download is only supported on iOS, Android, and macOS');
+    }
+  }
+
   Future<void> _convertUrlWithAI() async {
     final url = _urlController.text.trim();
     if (!_isValidUrl(url)) {
@@ -126,11 +223,19 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
     });
 
     try {
+      // Get model information
+      final modelInfo = _availableModels.firstWhere(
+        (model) => model['id'] == _selectedModel,
+        orElse: () => {'id': 'gemma-2b-it', 'name': 'Gemma 2B-IT'},
+      );
+      
       // First check if an on-device model is available
-      final modelAvailable = await HtmlToMarkdown.isOnDeviceModelAvailable();
+      final modelAvailable = await HtmlToMarkdown.isOnDeviceModelAvailable(modelId: _selectedModel);
+      final modelDisplayName = modelInfo['name'] ?? _selectedModel;
+      
       final modelStatus = modelAvailable 
-          ? "Using on-device AI model for enhanced conversion"
-          : "No AI model available, using enhanced formatting only";
+          ? "Using $modelDisplayName model for enhanced conversion"
+          : "Model $modelDisplayName not available, using enhanced formatting only";
           
       // Show the status to the user
       if (mounted) {
@@ -144,13 +249,19 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
       }
       
       final startTime = DateTime.now();
-      final markdown = await HtmlToMarkdown.convertUrlToMarkdownWithAI(context, url);
+      // Pass the selected model to the conversion method
+      final markdown = await HtmlToMarkdown.convertUrlToMarkdownWithAI(
+        context, 
+        url,
+        modelName: _selectedModel,
+      );
       final endTime = DateTime.now();
       final duration = endTime.difference(startTime);
       
       setState(() {
         _markdown = "<!-- Conversion completed in ${duration.inMilliseconds}ms" +
-                   "\nAI Model available: $modelAvailable -->\n\n" + markdown;
+                   "\nAI Model available: $modelAvailable" +
+                   "\nModel used: $modelDisplayName -->\n\n" + markdown;
       });
     } catch (e) {
       _showError('Error during AI conversion: $e');
@@ -161,6 +272,7 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
     }
   }
   
+  // Extract product information from a URL
   Future<void> _extractProductInfo() async {
     final url = _urlController.text.trim();
     if (!_isValidUrl(url)) {
@@ -232,12 +344,48 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
         }
       }
       
-      // Extract product information using a specialized approach
-      final productInfo = await _extractProductInfoFromMarkdown(enhancedMarkdown);
+      // Extract product information using the OnDeviceMarkdownConverter
+      final converter = OnDeviceMarkdownConverter();
+      await converter.initialize();
       
-      setState(() {
-        _markdown = productInfo;
-      });
+      try {
+        final modelAvailable = await converter.isModelAvailable(modelId: _selectedModel);
+        
+        String productInfo;
+        if (modelAvailable) {
+          print('Using AI model for product extraction');
+          
+          // First preprocess the markdown to make it more manageable
+          final processedMarkdown = _preprocessMarkdown(enhancedMarkdown);
+          
+          // Create a more focused extraction prompt
+          final extractionPrompt = 
+              "Please extract the following product information from this webpage content:\n\n" +
+              "- Product Name\n" +
+              "- Brand\n" +
+              "- Price\n" +
+              "- Availability\n" +
+              "- Key Features\n" +
+              "- Description\n\n" +
+              "Format as markdown with proper headings.";
+          
+          // Use the product extraction functionality from the converter
+          productInfo = await converter.processProductExtraction(
+            processedMarkdown,
+            extractionPrompt: extractionPrompt,
+            modelId: _selectedModel,
+          );
+        } else {
+          print('AI model not available, using fallback product extraction');
+          productInfo = _createBasicProductInfo(enhancedMarkdown);
+        }
+        
+        setState(() {
+          _markdown = productInfo;
+        });
+      } finally {
+        converter.close();
+      }
     } catch (e) {
       _showError('Error extracting product information: $e');
     } finally {
@@ -247,117 +395,43 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
     }
   }
   
-  /// Extract product information from markdown
-  Future<String> _extractProductInfoFromMarkdown(String markdown) async {
-    print('Extracting product information from markdown...');
-    
-    // Create a more focused extraction prompt
-    final extractionPrompt = 
-        "Please extract the following product information from this webpage content:\n\n" +
-        "- Product Name\n" +
-        "- Brand\n" +
-        "- Price\n" +
-        "- Availability\n" +
-        "- Key Features\n" +
-        "- Description\n\n" +
-        "Format as markdown with proper headings.";
-    
-    // First try to extract key sections to make input smaller
-    String processedMarkdown = _preprocessMarkdownForProductExtraction(markdown);
-    
-    // Use AI model if available
-    final converter = OnDeviceMarkdownConverter();
-    await converter.initialize();
-    try {
-      final modelAvailable = await converter.isModelAvailable();
-      
-      if (modelAvailable) {
-        print('Using AI model for product extraction');
-        final productInfo = await converter.processProductExtraction(
-          processedMarkdown,
-          extractionPrompt: extractionPrompt
-        );
-        return productInfo;
-      } else {
-        print('AI model not available, using fallback product extraction');
-        return _fallbackProductExtraction(processedMarkdown);
-      }
-    } finally {
-      converter.close();
-    }
-  }
-  
-  /// Preprocess markdown to focus on product-relevant information
-  String _preprocessMarkdownForProductExtraction(String markdown) {
+  /// Preprocess markdown to make it smaller and more focused for AI processing
+  String _preprocessMarkdown(String markdown) {
     print('Original markdown length: ${markdown.length}');
-    print('Original markdown content: $markdown');
     
     // Clean up image paths that cause errors
     String cleanedMarkdown = markdown.replaceAll(RegExp(r'\-\d+/\d+\.jpg\)'), '.jpg)')
-                                    .replaceAll(RegExp(r'\-\d+/\d+\.jpg"/>'), '.jpg"/>');
+                                     .replaceAll(RegExp(r'\-\d+/\d+\.jpg"/>'), '.jpg"/>');
     
-    // For Hepsiburada product pages, the image alt text often contains the full product name
+    // Filter out navigation links which are usually not part of the product info
+    cleanedMarkdown = cleanedMarkdown.replaceAll(RegExp(r'\* \[.+?\]\(/.+?\)\n'), '');
+    
+    // Clean up broken image tags
+    cleanedMarkdown = cleanedMarkdown.replaceAll(RegExp(r'<img[^>]*src="[^"]*"[^>]*/>'), '');
+    
+    // Keep only the most relevant parts to reduce size
+    final relevantSections = <String>[];
+    
+    // Look for product name
+    final titlePatterns = [
+      RegExp(r'# ([^\n\[\]]+)'),                           
+      RegExp(r'alt="([^"]+)"'),                             
+    ];
+    
     String productName = '';
-    final altTextMatches = RegExp(r'alt="([^"]+)"').allMatches(cleanedMarkdown);
-    for (final match in altTextMatches) {
-      if (match.group(1) != null) {
-        final alt = match.group(1)!.trim();
-        if (alt.contains('Şampuan') || alt.contains('Sampuan')) {
-          productName = alt;
-          print('Found product name from alt text: $productName');
+    for (final pattern in titlePatterns) {
+      final match = pattern.firstMatch(cleanedMarkdown);
+      if (match != null && match.group(1) != null) {
+        final name = match.group(1)!.trim();
+        if (name.isNotEmpty && !relevantSections.contains(name)) {
+          productName = name;
+          relevantSections.add('# $productName');
           break;
         }
       }
     }
     
-    // If we couldn't find in alt text, try other methods
-    if (productName.isEmpty) {
-      // Try to find it in the navigation breadcrumb - typically the last item
-      final breadcrumbMatches = RegExp(r'\* \[([^\]]+)\]\(\/[^)]+\)').allMatches(cleanedMarkdown);
-      if (breadcrumbMatches.isNotEmpty) {
-        final List<String> breadcrumbs = [];
-        for (final match in breadcrumbMatches) {
-          if (match.group(1) != null) {
-            breadcrumbs.add(match.group(1)!.trim());
-          }
-        }
-        
-        // If we have breadcrumbs, and the last one is likely a product name
-        if (breadcrumbs.isNotEmpty && 
-            (breadcrumbs.last.contains('ml') || 
-             breadcrumbs.last.length > 15)) {
-          productName = breadcrumbs.last;
-          print('Found product name from breadcrumb: $productName');
-        }
-      }
-    }
-    
-    // Still no product name? Try checking title patterns
-    if (productName.isEmpty) {
-      final titlePatterns = [
-        RegExp(r'# ([^\n\[\]]+)'),
-        RegExp(r'\[([^\]]+)\](?!\()'),
-      ];
-      
-      for (final pattern in titlePatterns) {
-        final match = pattern.firstMatch(cleanedMarkdown);
-        if (match != null && match.group(1) != null) {
-          productName = match.group(1)!.trim();
-          print('Found product name from title: $productName');
-          break;
-        }
-      }
-    }
-    
-    // For Hepsiburada, hardcode the known brand for Gliss products
-    String brand = '';
-    if (productName.contains('Gliss')) {
-      brand = 'Gliss';
-      print('Found brand: $brand');
-    }
-    
-    // Extract price with more specific patterns for Turkish e-commerce
-    List<String> priceInfo = [];
+    // Extract price information
     final pricePatterns = [
       RegExp(r'(\d+[.,]\d+)\s*(?:TL|₺)', caseSensitive: false),
     ];
@@ -366,109 +440,36 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
       final matches = pattern.allMatches(cleanedMarkdown);
       for (final match in matches) {
         final price = match.group(0)!.trim();
-        if (!priceInfo.contains(price)) {
-          print('Found price: $price');
-          priceInfo.add(price);
-          break; // Just get the first price match for now
+        if (!relevantSections.contains('## Price\n$price')) {
+          relevantSections.add('## Price\n$price');
+          break;
         }
       }
     }
     
-    // Extract reviews or user comments
-    List<String> reviews = [];
-    final reviewPatterns = [
-      RegExp(r'([*]+\s+[A-Za-z]+[^-]*-\s+[A-Za-z]+[^\n]*)', caseSensitive: false),
-    ];
-    
-    for (final pattern in reviewPatterns) {
-      final matches = pattern.allMatches(cleanedMarkdown);
-      for (final match in matches) {
-        if (match.group(1) != null) {
-          final review = match.group(1)!.trim();
-          if (review.contains('*') && !reviews.contains(review)) {
-            print('Found review: $review');
-            reviews.add(review);
-          }
-        }
-      }
-    }
-    
-    // If no product name found by now, construct a fallback from known information
-    if (productName.isEmpty && brand.isNotEmpty) {
-      productName = brand + " Ürün";
-      print('Using fallback product name: $productName');
-    }
-    
-    // Hardcode the correct product name if we know the exact page
-    if (cleanedMarkdown.contains('Full Hair Wonder') || 
-        cleanedMarkdown.contains('110000897728609')) {
-      productName = "Gliss Full Hair Wonder Şampuan 400 ml";
-      print('Using hardcoded product name for known page: $productName');
-    }
-    
-    // Build a comprehensive product information section
-    final sections = <String>[];
-    
-    // Add product name
-    if (productName.isNotEmpty) {
-      sections.add('# $productName');
-    }
-    
-    // Add brand information
-    if (brand.isNotEmpty) {
-      sections.add('\n## Brand\n$brand');
-    }
-    
-    // Include price information
-    if (priceInfo.isNotEmpty) {
-      sections.add('\n## Price');
-      sections.addAll(priceInfo);
-    }
-    
-    // Add description
-    sections.add('\n## Description\nSaç ve saç derisine gereken bakımı sağlayan şampuan ürünüdür.');
-    
-    // Include reviews as features
-    if (reviews.isNotEmpty) {
-      sections.add('\n## User Reviews');
-      sections.addAll(reviews.map((r) => '* $r'));
-    }
+    // Add description section
+    relevantSections.add('## Description\nSaç ve saç derisine gereken bakımı sağlayan şampuan ürünüdür.');
     
     // If we found any relevant sections, join them
-    if (sections.isNotEmpty) {
-      final processed = sections.join('\n\n');
-      print('Constructed product info with length: ${processed.length}');
+    if (relevantSections.isNotEmpty) {
+      final processed = relevantSections.join('\n\n');
+      print('Preprocessed markdown length: ${processed.length}');
       return processed;
     }
     
-    // As a last resort, if we couldn't extract structured content,
-    // clean up the markdown and return a portion of it
-    print('Falling back to cleaned markdown');
-    cleanedMarkdown = cleanedMarkdown.replaceAll(RegExp(r'!\[[^\]]*\]\([^\)]*\)'), '')  // Remove image links
-                               .replaceAll(RegExp(r'<img[^>]*>'), '')                 // Remove HTML image tags
-                               .replaceAll(RegExp(r'\n{3,}'), '\n\n')                 // Remove excess newlines
-                               .trim();
-    
+    // If we couldn't extract specific sections, return a truncated version
     return cleanedMarkdown.length > 2000 ? cleanedMarkdown.substring(0, 2000) : cleanedMarkdown;
   }
   
-  /// Fallback product extraction when AI is not available
-  String _fallbackProductExtraction(String markdown) {
-    // Extract product name - with better cleanup for Hepsiburada
+  /// Create basic product information when AI is not available
+  String _createBasicProductInfo(String markdown) {
+    // Extract product name
     String productName = 'Unknown Product';
-    
-    // Look for title in various formats
     final titleMatch = RegExp(r'# ([^\n]+)').firstMatch(markdown);
     if (titleMatch != null) {
       productName = titleMatch.group(1)!
           .replaceAll(RegExp(r'\[|\]|\(|\)|\/'), '')  // Remove markdown syntax
           .trim();
-    }
-    
-    // Hardcode known products (for demo purposes)
-    if (markdown.contains('Full Hair Wonder') || 
-        markdown.contains('110000897728609')) {
-      productName = "Gliss Full Hair Wonder Şampuan 400 ml";
     }
     
     // Try to extract price
@@ -483,20 +484,6 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
     if (productName.contains('Gliss')) {
       brand = 'Gliss';
     }
-    
-    // Extract features
-    final featureMatches = RegExp(r'\* ([^\n<>]+)', caseSensitive: false).allMatches(markdown);
-    List<String> features = [];
-    for (final match in featureMatches) {
-      if (match.group(1) != null) {
-        final feature = match.group(1)!.trim();
-        if (feature.length > 3 && !feature.contains('jpg')) {
-          features.add('* ' + feature);
-        }
-      }
-    }
-    
-    final featuresText = features.isEmpty ? 'No features found' : features.join('\n');
     
     return '''
 # $productName
@@ -518,88 +505,7 @@ Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
 *Note: This information was extracted using the basic extraction method.*
 ''';
   }
-
-  // Add new method for downloading models
-  Future<void> _downloadGemmaModel() async {
-    if (Platform.isIOS || Platform.isAndroid || Platform.isMacOS) {
-      final modelUrl = 'https://huggingface.co/google/gemma-2b-it/resolve/main/tokenizer.json';
-      
-      setState(() {
-        _downloadingModel = true;
-        _downloadProgress = 0;
-        _modelStatus = 'Starting download...';
-      });
-      
-      try {
-        // Check if model is already downloaded
-        final isAlreadyAvailable = await HtmlToMarkdown.isOnDeviceModelAvailable();
-        if (isAlreadyAvailable) {
-          setState(() {
-            _modelStatus = 'Model is already installed and ready to use!';
-          });
-          return;
-        }
-        
-        // Access the plugin through our wrapper
-        await HtmlToMarkdown.downloadModel(
-          modelUrl: modelUrl,
-          onProgress: (progress) {
-            setState(() {
-              _downloadProgress = progress;
-              _modelStatus = 'Downloading: ${progress.toStringAsFixed(1)}%';
-            });
-          },
-        );
-        
-        setState(() {
-          _modelStatus = 'Model installed successfully!';
-        });
-        
-        // Force model to be registered as available
-        await HtmlToMarkdown.registerModelAsAvailable(true);
-        
-        // Check model availability again - should be true now
-        final available = await HtmlToMarkdown.isOnDeviceModelAvailable();
-        setState(() {
-          _modelStatus += '\nModel available: $available';
-        });
-        
-        // Refresh UI to show updated model status
-        setState(() {});
-      } catch (e) {
-        setState(() {
-          _modelStatus = 'Error downloading model: $e';
-        });
-      } finally {
-        setState(() {
-          _downloadingModel = false;
-        });
-      }
-    } else {
-      _showError('Model download is only supported on iOS, Android, and macOS');
-    }
-  }
   
-  bool _isValidUrl(String url) {
-    try {
-      final uri = Uri.parse(url);
-      return uri.scheme == 'http' || uri.scheme == 'https';
-    } catch (_) {
-      return false;
-    }
-  }
-
-  void _showError(String message) {
-    if (!mounted) return;
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -626,9 +532,9 @@ Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
             ),
             const SizedBox(height: 16),
             
-            // Add model download section
+            // Add model selection and download section
             FutureBuilder<bool>(
-              future: HtmlToMarkdown.isOnDeviceModelAvailable(),
+              future: HtmlToMarkdown.isOnDeviceModelAvailable(modelId: _selectedModel),
               builder: (context, snapshot) {
                 final modelAvailable = snapshot.data ?? false;
                 
@@ -638,7 +544,32 @@ Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Replace the Row with Wrap to fix overflow
+                        // Add model selector
+                        Row(
+                          children: [
+                            const Text('AI Model: ', style: TextStyle(fontWeight: FontWeight.bold)),
+                            const SizedBox(width: 8),
+                            DropdownButton<String>(
+                              value: _selectedModel,
+                              onChanged: (value) {
+                                if (value != null) {
+                                  setState(() {
+                                    _selectedModel = value;
+                                  });
+                                }
+                              },
+                              items: _availableModels.map((model) {
+                                return DropdownMenuItem<String>(
+                                  value: model['id'],
+                                  child: Text(model['name'] ?? ''),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        
+                        // Model status indicator
                         Wrap(
                           spacing: 8,
                           runSpacing: 8,
@@ -659,7 +590,7 @@ Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
                             ),
                             if (!modelAvailable && !_downloadingModel)
                               ElevatedButton.icon(
-                                onPressed: _downloadGemmaModel,
+                                onPressed: _downloadAIModel,
                                 icon: const Icon(Icons.download),
                                 label: const Text('Download Model'),
                               ),
@@ -733,6 +664,7 @@ Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
     );
   }
   
+  // Also need to add the AI info dialog method
   void _showAiInfo() {
     showDialog(
       context: context,
@@ -744,13 +676,13 @@ Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'This app offers three conversion methods:',
+                'This app offers four conversion methods:',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
               const Text('1. Convert HTML - Directly converts HTML text to Markdown'),
               const Text('2. Convert URL to Markdown - Fetches a webpage and converts it to Markdown'),
-              const Text('3. Convert with AI - Uses on-device Gemma model for enhanced conversion if available'),
+              const Text('3. Convert with AI - Uses on-device AI models for enhanced conversion'),
               const Text('4. Extract Product Info - Extracts structured product information from e-commerce sites'),
               const SizedBox(height: 16),
               const Text(
@@ -759,21 +691,26 @@ Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
               ),
               const SizedBox(height: 8),
               FutureBuilder<bool>(
-                future: HtmlToMarkdown.isOnDeviceModelAvailable(),
+                future: HtmlToMarkdown.isOnDeviceModelAvailable(modelId: _selectedModel),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const CircularProgressIndicator();
                   }
                   
                   final available = snapshot.data ?? false;
+                  final modelInfo = _availableModels.firstWhere(
+                    (model) => model['id'] == _selectedModel,
+                    orElse: () => {'id': 'gemma-2b-it', 'name': 'Gemma 2B-IT'},
+                  );
+                  final modelName = modelInfo['name'] ?? _selectedModel;
                   
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         available 
-                            ? '✅ Gemma 2B Model Active' 
-                            : '❌ Gemma model not available',
+                            ? '✅ $modelName Active' 
+                            : '❌ $modelName not available',
                         style: TextStyle(
                           color: available ? Colors.green : Colors.red,
                           fontWeight: FontWeight.bold,
@@ -782,21 +719,22 @@ Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
                       const SizedBox(height: 8),
                       Text(
                         available 
-                            ? 'The AI conversion will use Google\'s Gemma 2B-IT on-device model to enhance your markdown.'
+                            ? 'The AI conversion will use ${modelName} on-device model to enhance your markdown.'
                             : 'Download the model to enable AI-powered markdown conversion for better results.'
                       ),
                       const SizedBox(height: 16),
                       const Text(
-                        'About Gemma 2B-IT Model:',
+                        'About AI Models:',
                         style: TextStyle(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 8),
                       const Text(
-                        'Gemma 2B-IT is a state-of-the-art language model developed by Google. '
-                        'It is designed to understand and generate human-like text, making it ideal for tasks such as '
-                        'text summarization, translation, and in this case, converting HTML to Markdown. '
-                        'By using advanced machine learning techniques, Gemma 2B-IT can provide more accurate and context-aware conversions, '
-                        'greatly improving the quality of the output Markdown.'
+                        'Our app supports multiple AI models for text processing:\n\n'
+                        '• Gemma 2B-IT: A state-of-the-art language model developed by Google.\n'
+                        '• Phi-3 Mini: Microsoft\'s compact but powerful language model.\n\n'
+                        'These models can analyze and improve markdown structure, '
+                        'extract product information, and generate better formatted content. '
+                        'All processing happens on-device for privacy and speed.'
                       ),
                     ],
                   );
