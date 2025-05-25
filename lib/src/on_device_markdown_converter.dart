@@ -11,7 +11,6 @@ class OnDeviceMarkdownConverter {
   static const String _defaultModelId = 'gemma-2b-it';
 
   // In-memory fallback in case Hive fails
-  static bool _inMemoryModelAvailable = false;
   static final Map<String, bool> _inMemoryModelAvailability = {};
 
   /// Initialize the converter
@@ -64,13 +63,6 @@ class OnDeviceMarkdownConverter {
         modelId != null ? '${_keyModelPath}_$modelId' : _keyModelPath;
 
     try {
-      // Update in-memory state (as backup)
-      if (modelId != null) {
-        _inMemoryModelAvailability[modelId] = available;
-      } else {
-        _inMemoryModelAvailable = available;
-      }
-
       if (await _isBoxAvailable()) {
         final box = Hive.box(_boxName);
         await box.put(modelKey, available);
