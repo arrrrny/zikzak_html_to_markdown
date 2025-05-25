@@ -4,6 +4,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 // Import for platform detection and dart:async
 import 'dart:io' show Platform;
 import 'dart:async';
+import 'dart:math' show min;
 
 // Import the required classes from the package
 import 'package:zikzak_html_to_markdown/src/html_fetcher.dart';
@@ -480,30 +481,450 @@ class _HtmlToMarkdownDemoState extends State<HtmlToMarkdownDemo> {
     }
     
     // Try to extract brand
-    String brand = 'Unknown Brand';
-    if (productName.contains('Gliss')) {
-      brand = 'Gliss';
+    String brand = 'Brand not identified';
+    final brandPatterns = [
+      RegExp(r'brand[:\s]+([^,\n\.]+)', caseSensitive: false),
+      RegExp(r'marka[:\s]+([^,\n\.]+)', caseSensitive: false),
+    ];
+    
+    for (final pattern in brandPatterns) {
+      final match = pattern.firstMatch(markdown);
+      if (match != null && match.group(1) != null) {
+        brand = match.group(1)!.trim();
+        break;
+      }
     }
     
-    return '''
-# $productName
+    // If brand isn't found in explicit mentions, try to extract from product name
+    if (brand == 'Brand not identified' && productName != 'Unknown Product') {
+      final nameParts = productName.split(' ');
+      if (nameParts.isNotEmpty) {
+        brand = nameParts.first.trim();
+      }
+    }
+    
+    // Extract features if present
+    final features = <String>[];
+    final featureMatches = RegExp(r'[•\*\-]\s+([^\n]+)', caseSensitive: false).allMatches(markdown);
+    for (final match in featureMatches) {
+      if (match.group(1) != null) {
+        features.add(match.group(1)!.trim());
+      }
+    }
+    
+    // Extract description
+    String description = 'No description available';
+    final descMatch = RegExp(r'(?:description|açıklama)[:\s]+([^#]+)', caseSensitive: false).firstMatch(markdown);
+    if (descMatch != null && descMatch.group(1) != null) {
+      description = descMatch.group(1)!.trim();
+    }
+    
+    // Build the product info markdown
+    final sb = StringBuffer();
+    sb.writeln('# $productName\n');
+    sb.writeln('## Brand');
+    sb.writeln('$brand\n');
+    sb.writeln('## Price');
+    sb.writeln('$price\n');
+    sb.writeln('## Description');
+    sb.writeln('$description\n');
+    
+    if (features.isNotEmpty) {
+      sb.writeln('## Features');
+      for (final feature in features) {
+        sb.writeln('* $feature');
+      }
+      sb.writeln('');
+    }
+    
+    sb.writeln('*Note: This information was extracted using the basic extraction method.*');
+    
+    return sb.toString();
+  }
+  
+  // Add this new method for category extraction
+  Future<void> _extractProductCategory() async {
+    final url = _urlController.text.trim();
+    if (!_isValidUrl(url)) {
+      _showError('Please enter a valid product URL');
+      return;
+    }
 
-## Brand
-$brand
+    setState(() {
+      _loading = true;
+      _markdown = '';
+    });
 
-## Price
-$price
+    try {
+      print('🔍 CATEGORY EXTRACTION: Starting category extraction for URL: $url');
+      
+      // Fetch the HTML content
+      final completer = Completer<String>();
+      
+      showModalBottomSheet(
+        context: context,
+        isDismissible: false,
+        enableDrag: false,
+        builder: (context) => HtmlFetcher(
+          url: url,
+          onComplete: (content) {
+            print('🔍 CATEGORY EXTRACTION: HTML content fetched successfully (${content.length} characters)');
+            // Log a small sample of the HTML to verify content
+            print('🔍 HTML SAMPLE: ${content.substring(0, min(300, content.length))}...');
+            completer.complete(content);
+            Navigator.of(context).pop();
+          },
+          onError: (error) {
+            print('❌ CATEGORY EXTRACTION: Error fetching HTML: $error');
+            completer.completeError(error);
+            Navigator.of(context).pop();
+          },
+        ),
+      );
+      
+      final htmlContent = await completer.future;
+      print('🔍 CATEGORY EXTRACTION: Converting HTML to basic markdown');
+      final basicMarkdown = HtmlParser.toMarkdown(htmlContent);
+      print('🔍 CATEGORY EXTRACTION: Basic markdown created (${basicMarkdown.length} characters)');
+      
+      // Extract category using regex patterns
+      print('🔍 CATEGORY EXTRACTION: Starting category extraction from HTML/markdown');
+      String categoryInfo = _extractCategoryInfo(htmlContent, basicMarkdown);
+      print('🔍 CATEGORY EXTRACTION: Initial category extraction results:\n$categoryInfo');
+      
+      // Check if AI model is available to enhance the extraction
+      print('🔍 CATEGORY EXTRACTION: Initializing AI converter');
+      final converter = OnDeviceMarkdownConverter();
+      await converter.initialize();
+      
+      try {
+        print('🔍 CATEGORY EXTRACTION: Checking if AI model available');
+        final modelAvailable = await converter.isModelAvailable(modelId: _selectedModel);
+        print('🔍 CATEGORY EXTRACTION: AI model available: $modelAvailable');
+        
+        // Extract product name from the category info
+        String productName = _extractProductNameFromMarkdown(categoryInfo);
+        print('🔍 CATEGORY EXTRACTION: Using product name: $productName');
+        
+        // Extract categories from the current categoryInfo
+        List<String> categories = _extractCategoriesFromMarkdown(categoryInfo);
+        
+        // Check if we already have good category results - use AI only if needed
+        final bool hasGoodCategories = categories.isNotEmpty && 
+            !categories.any((c) => c.contains('Id/') || c.contains('Unknown'));
+            
+        if (modelAvailable && !hasGoodCategories) {
+          print('🔍 CATEGORY EXTRACTION: Using AI model to help with category extraction');
+          
+          // Create a focused extraction prompt specifically for categories - remove hardcoded examples
+          final extractionPrompt = 
+              "Extract ONLY category names from this product. Ignore brand, price, description, etc.\n\n" +
+              "If you see category IDs like 'Id/60001547/2147483633/26012111/26012282', replace with real category names " +
+              "based on the type of product (don't guess specific categories).\n\n" +
+              "ONLY return a simple list of categories, nothing else.";
+          
+          // Send only category-related info to the AI
+          print('🔍 CATEGORY EXTRACTION: Sending to AI for category extraction help');
+          final aiSuggestions = await converter.processProductExtraction(
+            "Product name: $productName\nNeed to extract categories.",
+            extractionPrompt: extractionPrompt,
+            modelId: _selectedModel,
+          );
+          
+          print('🔍 CATEGORY EXTRACTION: Received category suggestions from AI:\n$aiSuggestions');
+          
+          // Extract categories from AI suggestions
+          final List<String> aiCategories = [];
+          final categoryLines = aiSuggestions.split('\n');
+          
+          for (final line in categoryLines) {
+            final trimmedLine = line.trim();
+            if (trimmedLine.startsWith('-') || trimmedLine.startsWith('•') || 
+                (trimmedLine.isNotEmpty && 
+                 !trimmedLine.startsWith('#') && 
+                 !trimmedLine.contains('unknown') &&
+                 !trimmedLine.contains('extract'))) {
+              final category = trimmedLine
+                  .replaceAll(RegExp(r'^[-•*]\s*'), '')  // Remove list markers
+                  .trim();
+              
+              if (category.isNotEmpty && 
+                  !category.contains('unknown') && 
+                  !category.contains('not available')) {
+                aiCategories.add(category);
+                print('🔍 CATEGORY DEBUG: Added AI-suggested category: "$category"');
+              }
+            }
+          }
+          
+          // Combine the AI categories with any existing categories
+          if (aiCategories.isNotEmpty) {
+            if (categories.isEmpty) {
+              categories = aiCategories;
+            } else {
+              // Add AI categories that aren't already in our list
+              for (final category in aiCategories) {
+                if (!categories.contains(category)) {
+                  categories.add(category);
+                }
+              }
+            }
+          }
+          
+          // Rebuild the category info with the new categories
+          categoryInfo = _buildCategoryMarkdown(productName, categories);
+        } else {
+          print('🔍 CATEGORY EXTRACTION: Skipping AI - ' + 
+                (hasGoodCategories ? 'already have good categories' : 'model unavailable'));
+        }
+      } finally {
+        converter.close();
+        print('🔍 CATEGORY EXTRACTION: AI converter closed');
+      }
+      
+      print('🔍 CATEGORY EXTRACTION: Setting markdown state with extracted categories');
+      setState(() {
+        _markdown = categoryInfo;
+      });
+      print('🔍 CATEGORY EXTRACTION: Category extraction completed successfully');
+    } catch (e) {
+      print('❌ CATEGORY EXTRACTION ERROR: $e');
+      _showError('Error extracting product category: $e');
+    } finally {
+      setState(() {
+        _loading = false;
+      });
+    }
+  }
+  
+  /// Helper method to extract categories from markdown text
+  List<String> _extractCategoriesFromMarkdown(String markdown) {
+    final List<String> categories = [];
+    
+    // Look for categories in the markdown content
+    final categoryListPattern = RegExp(r'## Categories\s+(.+?)(?=\n\n|\n##|\Z)', dotAll: true);
+    final categoryMatch = categoryListPattern.firstMatch(markdown);
+    
+    if (categoryMatch != null && categoryMatch.group(1) != null) {
+      final categoryText = categoryMatch.group(1)!;
+      final categoryItems = RegExp(r'\d+\.\s+(.+)').allMatches(categoryText);
+      
+      for (final item in categoryItems) {
+        if (item.group(1) != null) {
+          final category = item.group(1)!.trim();
+          categories.add(category);
+          print('🔍 CATEGORY DEBUG: Extracted existing category from markdown: "$category"');
+        }
+      }
+    }
+    
+    return categories;
+  }
+  
+  /// Helper method to build a formatted category markdown
+  String _buildCategoryMarkdown(String productName, List<String> categories) {
+    final categoryMarkdown = StringBuffer();
+    categoryMarkdown.writeln('# Product Category Analysis\n');
+    categoryMarkdown.writeln('## Product');
+    categoryMarkdown.writeln(productName);
+    
+    if (categories.isNotEmpty) {
+      categoryMarkdown.writeln('\n## Categories');
+      for (int i = 0; i < categories.length; i++) {
+        categoryMarkdown.writeln('${i + 1}. ${categories[i]}');
+      }
+      
+      if (categories.length > 1) {
+        categoryMarkdown.writeln('\n## Category Hierarchy');
+        categoryMarkdown.writeln('* ${categories[0]}');
+        for (int i = 1; i < categories.length; i++) {
+          categoryMarkdown.writeln('  * ${categories[i]}');
+        }
+      }
+    } else {
+      categoryMarkdown.writeln('\n## Categories');
+      categoryMarkdown.writeln('No categories found in the product page');
+    }
+    
+    categoryMarkdown.writeln('\n*Note: Categories extracted from product page structure.*');
+    
+    return categoryMarkdown.toString();
+  }
 
-## Description
-Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
-
-## Features
-* Saç tellerini güçlendirir
-* Parlaklık sağlar
-* 400 ml
-
-*Note: This information was extracted using the basic extraction method.*
-''';
+  /// Extract category information from HTML and markdown
+  String _extractCategoryInfo(String html, String markdown) {
+    // Try to find category information from breadcrumbs in HTML first
+    List<String> categories = [];
+    
+    print('🔍 CATEGORY DEBUG: Searching for breadcrumbs in HTML');
+    
+    // Look for product name first to help with category identification
+    String productName = 'Unknown Product';
+    final titleMatch = RegExp(r'<title[^>]*>([^<]+)</title>', caseSensitive: false).firstMatch(html);
+    if (titleMatch != null && titleMatch.group(1) != null) {
+      productName = titleMatch.group(1)!.trim();
+      print('🔍 CATEGORY DEBUG: Found product name from title: $productName');
+    }
+    
+    // Expanded breadcrumb patterns to catch more variations
+    final breadcrumbPatterns = [
+      // Standard breadcrumb patterns
+      RegExp(r'<[^>]*(?:breadcrumb|Breadcrumb|BreadCrumb)[^>]*>(.*?)</(?:ol|ul|nav|div)>', 
+          caseSensitive: false, dotAll: true),
+      // Navigation paths often used for breadcrumbs
+      RegExp(r'<[^>]*(?:navigation|Navigation|nav-path|navPath)[^>]*>(.*?)</(?:ol|ul|nav|div)>', 
+          caseSensitive: false, dotAll: true),
+      // Hepsiburada specific patterns
+      RegExp(r'<[^>]*(?:product-path|productPath|category-path|categoryPath)[^>]*>(.*?)</(?:ol|ul|nav|div|span)>', 
+          caseSensitive: false, dotAll: true),
+      // Look for common breadcrumb class names
+      RegExp(r'<[^>]*class="[^"]*(?:breadcrumb|Breadcrumb|crumb|Crumb|path|Path)[^"]*"[^>]*>(.*?)</(?:ol|ul|nav|div)>', 
+          caseSensitive: false, dotAll: true),
+    ];
+    
+    // Try each breadcrumb pattern
+    for (final pattern in breadcrumbPatterns) {
+      final match = pattern.firstMatch(html);
+      if (match != null && match.group(1) != null) {
+        print('🔍 CATEGORY DEBUG: Found breadcrumb content with pattern: ${pattern.pattern}');
+        final breadcrumbContent = match.group(1)!;
+        final itemPattern = RegExp(r'<a[^>]*>([^<]+)</a>', caseSensitive: false);
+        final items = itemPattern.allMatches(breadcrumbContent);
+        
+        print('🔍 CATEGORY DEBUG: Found ${items.length} potential breadcrumb items');
+        
+        // Temporary list to collect potential categories
+        List<String> tempCategories = [];
+        
+        for (final item in items) {
+          if (item.group(1) != null) {
+            final category = item.group(1)!.trim();
+            print('🔍 CATEGORY DEBUG: Examining breadcrumb item: "$category"');
+            
+            if (category.isNotEmpty && 
+                category != 'Home' && 
+                category != 'Ana Sayfa' &&
+                !category.contains('http')) {
+              tempCategories.add(category);
+              print('🔍 CATEGORY DEBUG: Added potential category: "$category"');
+            }
+          }
+        }
+        
+        if (tempCategories.isNotEmpty) {
+          categories = tempCategories;
+          print('🔍 CATEGORY DEBUG: Successfully extracted ${categories.length} categories from breadcrumb');
+          break; // Found categories in this pattern, no need to try others
+        }
+      }
+    }
+    
+    // If breadcrumbs not found, try to find category mentions in HTML
+    if (categories.isEmpty) {
+      print('🔍 CATEGORY DEBUG: No categories from breadcrumbs, searching for category sections');
+      
+      // Search for specific category sections in HTML
+      final categorySection = RegExp(r'<[^>]*(?:category|kategori)[^>]*>(.*?)</(?:div|section|span)>', 
+          caseSensitive: false, dotAll: true).firstMatch(html);
+      
+      if (categorySection != null && categorySection.group(1) != null) {
+        final sectionContent = categorySection.group(1)!;
+        final categoryNames = RegExp(r'>([^<>]+)<').allMatches(sectionContent);
+        
+        print('🔍 CATEGORY DEBUG: Found potential category section, examining content');
+        
+        for (final match in categoryNames) {
+          if (match.group(1) != null) {
+            final category = match.group(1)!.trim();
+            if (category.isNotEmpty && 
+                !category.contains('http') && 
+                category.length > 2) {
+              categories.add(category);
+              print('🔍 CATEGORY DEBUG: Added category from section: "$category"');
+            }
+          }
+        }
+      }
+    }
+    
+    
+    // If still no categories, try from markdown
+    if (categories.isEmpty) {
+      print('🔍 CATEGORY DEBUG: No categories found yet, searching in markdown');
+      
+      final categoryPattern = RegExp(r'(?:category|kategori|department|bölüm)\s*:?\s*([^\n,\.]+)', 
+          caseSensitive: false);
+      final categoryMatch = categoryPattern.firstMatch(markdown);
+      
+      if (categoryMatch != null && categoryMatch.group(1) != null) {
+        categories.add(categoryMatch.group(1)!.trim());
+        print('🔍 CATEGORY DEBUG: Added category from markdown: "${categoryMatch.group(1)!.trim()}"');
+      }
+    }
+    
+    // Extract product name from markdown if not already extracted from HTML
+    if (productName == 'Unknown Product') {
+      final markdownTitleMatch = RegExp(r'# ([^\n]+)').firstMatch(markdown);
+      if (markdownTitleMatch != null) {
+        productName = markdownTitleMatch.group(1)!
+            .replaceAll(RegExp(r'\[|\]|\(|\)|\/'), '')
+            .trim();
+      }
+    }
+    
+    // Build the markdown output
+    final categoryMarkdown = StringBuffer();
+    categoryMarkdown.writeln('# Product Category Analysis\n');
+    categoryMarkdown.writeln('## Product');
+    categoryMarkdown.writeln(productName);
+    
+    if (categories.isNotEmpty) {
+      categoryMarkdown.writeln('\n## Categories');
+      for (int i = 0; i < categories.length; i++) {
+        categoryMarkdown.writeln('${i + 1}. ${categories[i]}');
+      }
+      
+      if (categories.length > 1) {
+        categoryMarkdown.writeln('\n## Category Hierarchy');
+        categoryMarkdown.writeln('* ${categories[0]}');
+        for (int i = 1; i < categories.length; i++) {
+          categoryMarkdown.writeln('  * ${categories[i]}');
+        }
+      }
+    } else {
+      categoryMarkdown.writeln('\n## Categories');
+      categoryMarkdown.writeln('No categories found in the product page');
+    }
+    
+    categoryMarkdown.writeln('\n*Note: Categories extracted from product page structure.*');
+    
+    return categoryMarkdown.toString();
+  }
+  
+  /// Helper method to extract product name from markdown text
+  String _extractProductNameFromMarkdown(String markdown) {
+    String productName = 'Unknown Product';
+    
+    // Look for product name in the "## Product" section
+    final productSectionPattern = RegExp(r'## Product\s+(.+?)(?=\n\n|\n##|\Z)', dotAll: true);
+    final productMatch = productSectionPattern.firstMatch(markdown);
+    
+    if (productMatch != null && productMatch.group(1) != null) {
+      productName = productMatch.group(1)!.trim();
+      print('🔍 CATEGORY DEBUG: Extracted product name from markdown: "$productName"');
+      return productName;
+    }
+    
+    // Fallback to looking for a title/heading
+    final titleMatch = RegExp(r'# ([^\n]+)').firstMatch(markdown);
+    if (titleMatch != null) {
+      productName = titleMatch.group(1)!
+          .replaceAll(RegExp(r'\[|\]|\(|\)|\/'), '')  // Remove markdown syntax
+          .trim();
+      print('🔍 CATEGORY DEBUG: Extracted product name from title: "$productName"');
+    }
+    
+    return productName;
   }
   
   @override
@@ -638,6 +1059,16 @@ Saç bakımı için kullanılan, saçı besleyen ve güçlendiren şampuan.
                   label: const Text('Extract Product Info'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+                // Add new category extraction button with category icon
+                ElevatedButton.icon(
+                  onPressed: _extractProductCategory,
+                  icon: const Icon(Icons.category),
+                  label: const Text('Extract Category'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
                     foregroundColor: Colors.white,
                   ),
                 ),
